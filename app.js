@@ -811,7 +811,7 @@ if (btnMetronomo) {
         aggiornaMetronomo();
     });
 }
-const URL_API_PIANO = "https://pythonanywhere.com";
+const URL_API_PIANO = "https://granata.pythonanywhere.com/api/piano-auth";
 let modalitaRegistrazione = false;
 
 const schermataLogin = document.getElementById("schermata-login");
