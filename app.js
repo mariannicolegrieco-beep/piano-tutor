@@ -916,7 +916,7 @@ if (btnLogout) {
 controllaSessioneUtente();
 // === SINCRONIZZAZIONE SPARTITI CLOUD (PC <-> IPAD) ===
 (function () {
-  const API_BASE = "https://granata.pythonanywhere.com/api";
+  const API_BASE = "https://granata+pythonanywhere+com+api";
 
   function getEmailUtente() {
     try {
@@ -943,7 +943,21 @@ controllaSessioneUtente();
         if (typeof aggiornaMenuRecenti === "function") aggiornaMenuRecenti();
       }
     } catch (e) {
-      console.warn("Sincronizzazione cloud non riuscita:", e);
+      console.warn("Errore sync cloud:", e);
+    }
+  }
+
+  async function salvaSpartitoSulCloud(titolo, xmlTesto) {
+    const email = getEmailUtente();
+    if (!email || !titolo || !xmlTesto) return;
+    try {
+      await fetch(API_BASE + "/piano-salva-spartito", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, titolo, contenuto: xmlTesto })
+      });
+    } catch (e) {
+      console.warn("Errore salvataggio cloud:", e);
     }
   }
 
@@ -951,22 +965,16 @@ controllaSessioneUtente();
   if (inputFile) {
     inputFile.addEventListener("change", (e) => {
       const file = e.target.files[0];
-      const email = getEmailUtente();
-      if (!file || !email) return;
+      if (!file) return;
       const nomePulito = file.name.replace(/\.(xml|musicxml|mxl)$/i, "");
-      const reader = new FileReader();
-      reader.onload = async (ev) => {
-        const testo = ev.target.result;
-        if (typeof testo === "string" && testo.includes("<score-partwise")) {
-          await fetch(API_BASE + "/piano-salva-spartito", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, titolo: nomePulito, contenuto: testo })
-          });
-          scaricaSpartitiCloud();
+      setTimeout(async () => {
+        const recenti = JSON.parse(localStorage.getItem("pianoTutorRecenti") || "[]");
+        const trovato = recenti.find(r => r && r.nome === nomePulito);
+        if (trovato && trovato.xml) {
+          await salvaSpartitoSulCloud(trovato.nome, trovato.xml);
+          await scaricaSpartitiCloud();
         }
-      };
-      reader.readAsText(file);
+      }, 800);
     });
   }
 
@@ -976,19 +984,23 @@ controllaSessioneUtente();
       const email = getEmailUtente();
       const sel = document.getElementById("selectBranoPronto");
       if (!email || !sel) return;
-      const recenti = JSON.parse(localStorage.getItem("pianoTutorRecenti") || "[]");
-      const daEliminare = recenti.find(r => r && r.id && r.nome === sel.options[sel.selectedIndex]?.text?.replace(/^⭐\s*/, ""));
-      if (daEliminare && daEliminare.id) {
-        await fetch(API_BASE + "/piano-elimina-spartito", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, id: daEliminare.id })
-        });
+      const val = sel.value;
+      if (val && val.startsWith("RECENTE_")) {
+        const idx = parseInt(val.replace("RECENTE_", ""), 10);
+        const recenti = JSON.parse(localStorage.getItem("pianoTutorRecenti") || "[]");
+        if (recenti[idx] && recenti[idx].id) {
+          await fetch(API_BASE + "/piano-elimina-spartito", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, id: recenti[idx].id })
+          });
+        }
       }
     }, true);
   }
 
   window.addEventListener("load", () => {
-    setTimeout(scaricaSpartitiCloud, 600);
+    setTimeout(scaricaSpartitiCloud, 700);
   });
 })();
+
