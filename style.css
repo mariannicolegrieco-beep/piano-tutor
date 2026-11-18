@@ -1,0 +1,218 @@
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body {
+    background-color: #1e1e2e;
+    color: #ffffff;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.barra-superiore {
+    background-color: #181825;
+    padding: 7px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #313244;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.barra-superiore h1 {
+    font-size: 1.05rem;
+    color: #89b4fa;
+}
+
+.controlli {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.pulsante {
+    background-color: #313244;
+    color: #ffffff;
+    border: 1px solid #45475a;
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.82rem;
+    transition: background-color 0.2s;
+    display: inline-flex;
+    align-items: center;
+}
+
+.pulsante:hover {
+    background-color: #45475a;
+}
+
+.pulsante.primario {
+    background-color: #89b4fa;
+    color: #11111b;
+    font-weight: bold;
+    border: none;
+}
+
+.pulsante.primario:hover {
+    background-color: #b4befe;
+}
+
+.pulsante.attivo {
+    background-color: #a6e3a1;
+    color: #11111b;
+    font-weight: bold;
+}
+
+.stato {
+    font-size: 0.78rem;
+    color: #a6adc8;
+    margin-left: 4px;
+}
+
+.area-principale {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background-color: #11111b;
+    padding: 5px;
+    gap: 5px;
+    overflow: hidden;
+}
+
+/* AREA SPARTITO PROFESSIONALE (OSMD) */
+.area-spartito {
+    width: 100%;
+    max-width: 1200px;
+    flex: 2.3;
+    background-color: #fdfbf7;
+    border: 2px solid #313244;
+    border-radius: 8px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    position: relative;
+    scroll-behavior: smooth;
+}
+
+.area-principale.solo-spartito .area-spartito {
+    flex: 1;
+}
+
+.area-principale.solo-spartito .contenitore-cascata {
+    display: none;
+}
+
+.area-principale.solo-cascata .area-spartito {
+    display: none;
+}
+
+.osmd-container {
+    height: 100%;
+    min-width: 100%;
+    background-color: #fdfbf7;
+    padding: 8px 16px;
+}
+
+/* AREA CASCATA */
+.contenitore-cascata {
+    position: relative;
+    flex: 1;
+    width: 100%;
+    max-width: 1200px;
+    background: linear-gradient(180deg, #181825 0%, #1e1e2e 100%);
+    border: 1px solid #313244;
+    border-radius: 8px 8px 0 0;
+    overflow: hidden;
+}
+
+#canvas-cascata {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.messaggio-guida {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(24, 24, 37, 0.9);
+    padding: 5px 12px;
+    border-radius: 20px;
+    border: 1px solid #45475a;
+    font-size: 0.82rem;
+    color: #cdd6f4;
+    pointer-events: none;
+    text-align: center;
+}
+
+/* TASTIERA */
+.contenitore-tastiera {
+    height: 125px;
+    width: 100%;
+    max-width: 1200px;
+    display: flex;
+    justify-content: center;
+    border-top: 3px solid #cba6f7;
+}
+
+.tastiera {
+    position: relative;
+    display: flex;
+    width: 100%;
+    height: 100%;
+}
+
+.tasto-bianco {
+    flex: 1;
+    background-color: #ffffff;
+    border: 1px solid #999999;
+    border-radius: 0 0 5px 5px;
+    position: relative;
+    cursor: pointer;
+    z-index: 1;
+}
+
+.tasto-bianco.premuto {
+    background-color: #89b4fa;
+}
+
+.tasto-bianco.suggerito-D {
+    background-color: #89b4fa;
+}
+
+.tasto-bianco.suggerito-S {
+    background-color: #cba6f7;
+}
+
+.tasto-nero {
+    position: absolute;
+    width: 1.35%;
+    height: 60%;
+    background-color: #181825;
+    border: 1px solid #000000;
+    border-radius: 0 0 4px 4px;
+    z-index: 2;
+    cursor: pointer;
+    transform: translateX(-50%);
+}
+
+.tasto-nero.premuto {
+    background-color: #f38ba8;
+}
+
+.tasto-nero.suggerito-D {
+    background-color: #74c7ec;
+}
+
+.tasto-nero.suggerito-S {
+    background-color: #f5c2e7;
+}
