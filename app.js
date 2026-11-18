@@ -577,14 +577,36 @@ let ascoltoMicAttivo = false;
 let ultimaNotaMic = null;
 
 btnMic.addEventListener('click', async () => {
-    if (ascoltoMicAttivo) return;
+  if (ascoltoMicAttivo) {
+  ascoltoMicAttivo = false;
+  if (window.streamMicCorrente) {
+    window.streamMicCorrente.getTracks().forEach(t => t.stop());
+    window.streamMicCorrente = null;
+  }
+  if (ultimaNotaMic) {
+    gestisciNotaRilasciata(ultimaNotaMic);
+    ultimaNotaMic = null;
+  }
+  btnMic.classList.remove("attivo");
+  testoStato.textContent = "Microfono disattivato.";
+  return;
+}
 
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const sorgente = audioCtx.createMediaStreamSource(stream);
-        const analizzatore = audioCtx.createAnalyser();
-        analizzatore.fftSize = 2048;
+        const stream = await navigator.mediaDevices.getUserMedia({
+  audio: {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false
+  }
+});
+window.streamMicCorrente = stream;
+if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+if (audioCtx.state === "suspended") await audioCtx.resume();
+const sorgente = audioCtx.createMediaStreamSource(stream);
+const analizzatore = audioCtx.createAnalyser();
+analizzatore.fftSize = 4096;
+
         sorgente.connect(analizzatore);
 
         ascoltoMicAttivo = true;
@@ -594,6 +616,7 @@ btnMic.addEventListener('click', async () => {
         const buffer = new Float32Array(analizzatore.fftSize);
 
         function analizzaSuono() {
+          if (!ascoltoMicAttivo) return;
             analizzatore.getFloatTimeDomainData(buffer);
             const frequenza = rilevaFrequenza(buffer, audioCtx.sampleRate);
 
@@ -624,7 +647,7 @@ function rilevaFrequenza(buffer, sampleRate) {
         rms += valore * valore;
     }
     rms = Math.sqrt(rms / buffer.length);
-    if (rms < 0.02) return -1;
+   if (rms < 0.005) return -1;
 
     let r1 = 0, r2 = buffer.length - 1, soglia = 0.2;
     for (let i = 0; i < buffer.length / 2; i++) {
