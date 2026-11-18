@@ -914,3 +914,81 @@ if (btnLogout) {
 }
 
 controllaSessioneUtente();
+// === SINCRONIZZAZIONE SPARTITI CLOUD (PC <-> IPAD) ===
+(function () {
+  const API_BASE = "https://granata.pythonanywhere.com/api";
+
+  function getEmailUtente() {
+    try {
+      const u = JSON.parse(localStorage.getItem("pianoTutorUtente") || "null");
+      return u && u.email ? u.email.trim().toLowerCase() : "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  async function scaricaSpartitiCloud() {
+    const email = getEmailUtente();
+    if (!email) return;
+    try {
+      const res = await fetch(API_BASE + "/piano-spartiti", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      });
+      const dati = await res.json();
+      if (dati.ok && Array.isArray(dati.spartiti)) {
+        const lista = dati.spartiti.map(s => ({ id: s.id, nome: s.titolo, xml: s.contenuto }));
+        localStorage.setItem("pianoTutorRecenti", JSON.stringify(lista));
+        if (typeof aggiornaMenuRecenti === "function") aggiornaMenuRecenti();
+      }
+    } catch (e) {
+      console.warn("Sincronizzazione cloud non riuscita:", e);
+    }
+  }
+
+  const inputFile = document.getElementById("input-spartito");
+  if (inputFile) {
+    inputFile.addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      const email = getEmailUtente();
+      if (!file || !email) return;
+      const nomePulito = file.name.replace(/\.(xml|musicxml|mxl)$/i, "");
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        const testo = ev.target.result;
+        if (typeof testo === "string" && testo.includes("<score-partwise")) {
+          await fetch(API_BASE + "/piano-salva-spartito", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, titolo: nomePulito, contenuto: testo })
+          });
+          scaricaSpartitiCloud();
+        }
+      };
+      reader.readAsText(file);
+    });
+  }
+
+  const btnElimina = document.getElementById("btnEliminaBrano");
+  if (btnElimina) {
+    btnElimina.addEventListener("click", async () => {
+      const email = getEmailUtente();
+      const sel = document.getElementById("selectBranoPronto");
+      if (!email || !sel) return;
+      const recenti = JSON.parse(localStorage.getItem("pianoTutorRecenti") || "[]");
+      const daEliminare = recenti.find(r => r && r.id && r.nome === sel.options[sel.selectedIndex]?.text?.replace(/^⭐\s*/, ""));
+      if (daEliminare && daEliminare.id) {
+        await fetch(API_BASE + "/piano-elimina-spartito", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, id: daEliminare.id })
+        });
+      }
+    }, true);
+  }
+
+  window.addEventListener("load", () => {
+    setTimeout(scaricaSpartitiCloud, 600);
+  });
+})();
