@@ -916,7 +916,7 @@ if (btnLogout) {
 controllaSessioneUtente();
 // === SINCRONIZZAZIONE SPARTITI CLOUD (PC <-> IPAD) ===
 (function () {
-  const API_BASE = "https://granata+pythonanywhere+com+api";
+  const API_BASE = "https://granata.pythonanywhere.com/api";
 
   function getEmailUtente() {
     try {
