@@ -23,6 +23,27 @@ let osmd = null;
 // Stato dello studio
 let modalitaMani = 'ENTRAMBE'; // 'ENTRAMBE', 'D', 'S'
 let modalitaVista = 0; // 0 = Completa, 1 = Pagina Intera, 2 = Solo Cascata
+async function richiediResetPassword() {
+  const campoEmail = document.getElementById("auth-email");
+  const email = prompt("Inserisci l'email con cui ti sei registrato:", campoEmail ? campoEmail.value : "");
+  if (!email) return;
+  try {
+    const res = await fetch("https://granata.pythonanywhere.com/api/piano-richiedi-reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email.trim() })
+    });
+    const dati = await res.json();
+    if (dati.ok) {
+      alert("Richiesta inviata! L'amministratore ha ricevuto l'avviso su Telegram e ti fornirà a breve la nuova password.");
+    } else {
+      alert(dati.errore || "Email non trovata.");
+    }
+  } catch (e) {
+    alert("Impossibile contattare il server.");
+  }
+}
+
 let passiSpartito = Array.of(); // Ogni elemento è un passo (accordo o nota singola) del cursore OSMD
 let indicePassoCorrente = 0;
 let noteInAttesa = Array.of();
