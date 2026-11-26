@@ -485,92 +485,107 @@ function suonaErrore() {
 }
 
 function gestisciNotaPremuta(midi) {
-    const passoAttuale = passiSpartito.at(indicePassoCorrente);
-    const inAttesaOra = passoAttuale && tempoCorrente >= passoAttuale.tempoInizio - 0.1 && noteInAttesa.length > 0;
+  const passoAttuale = passiSpartito.at(indicePassoCorrente);
+  const inAttesaOra = passoAttuale && noteInAttesa.length > 0;
 
-    if (inAttesaOra) {
-        const notaTrovata = noteInAttesa.find(n => n.midi === midi && !n.suonata);
+  if (inAttesaOra) {
+    const notaTrovata = noteInAttesa.find(n => n.midi === midi && !n.suonata);
 
-        if (notaTrovata) {
-            if (mappaTasti[midi]) mappaTasti[midi].classList.add('premuto');
-            notaTrovata.suonata = true;
-            noteInAttesa = noteInAttesa.filter(n => n !== notaTrovata);
-
-            if (mappaTasti[midi]) {
-                mappaTasti[midi].classList.remove('suggerito-D', 'suggerito-S');
-            }
-
-            // Se tutte le note di questo passo sono state suonate, avanza il cursore dello spartito!
-            if (noteInAttesa.length === 0) {
-                if (indicePassoCorrente < passiSpartito.length - 1) {
-                    indicePassoCorrente++;
-                    osmd.cursor.next();
-                    centraCursoreOrizzontalmente();
-                    preparaPassoCorrente();
-                } else {
-                    inRiproduzione = false;
-                    btnPlay.textContent = "▶️ Avvia";
-                    testoStato.textContent = "Brano completato! Ottimo lavoro!";
-                }
-            }
-            disegnaCascata();
-        } else {
-            // Nota sbagliata! Suono di errore e lampeggio rosso sul tasto
-            suonaErrore();
-            if (mappaTasti[midi]) {
-                mappaTasti[midi].style.backgroundColor = '#f38ba8';
-                setTimeout(() => {
-                    if (mappaTasti[midi]) mappaTasti[midi].style.backgroundColor = '';
-                }, 300);
-            }
-        }
-    } else if (mappaTasti[midi]) {
+    if (notaTrovata) {
+      if (mappaTasti[midi]) {
+        mappaTasti[midi].style.backgroundColor = '';
         mappaTasti[midi].classList.add('premuto');
+      }
+      notaTrovata.suonata = true;
+      noteInAttesa = noteInAttesa.filter(n => n !== notaTrovata);
+
+      if (mappaTasti[midi]) {
+        mappaTasti[midi].classList.remove('suggerito-D', 'suggerito-S');
+      }
+
+      // Se tutte le note di questo passo sono state suonate, avanza il cursore dello spartito!
+      if (noteInAttesa.length === 0) {
+        if (indicePassoCorrente < passiSpartito.length - 1) {
+          indicePassoCorrente++;
+          osmd.cursor.next();
+          centraCursoreOrizzontalmente();
+          preparaPassoCorrente();
+          // Allinea subito il tempo della cascata al nuovo passo così non resta indietro!
+          if (passiSpartito[indicePassoCorrente]) {
+            tempoCorrente = passiSpartito[indicePassoCorrente].tempoInizio;
+          }
+        } else {
+          inRiproduzione = false;
+          btnPlay.textContent = "▶ Avvia";
+          testoStato.textContent = "Brano completato! Ottimo lavoro!";
+        }
+      }
+      disegnaCascata();
+    } else {
+      // Nota sbagliata! Suono di errore e lampeggio rosso ben visibile sul tasto
+      suonaErrore();
+      if (mappaTasti[midi]) {
+        mappaTasti[midi].style.backgroundColor = '#f38ba8';
+        setTimeout(() => {
+          if (mappaTasti[midi]) mappaTasti[midi].style.backgroundColor = '';
+        }, 400);
+      }
     }
+  } else if (mappaTasti[midi]) {
+    mappaTasti[midi].classList.add('premuto');
+  }
 }
 
 function gestisciNotaRilasciata(midi) {
-    if (mappaTasti[midi]) {
-        mappaTasti[midi].classList.remove('premuto');
-    }
+  if (mappaTasti[midi]) {
+    mappaTasti[midi].classList.remove('premuto');
+  }
 }
 
 btnMidi.addEventListener('click', async () => {
-    if (!navigator.requestMIDIAccess) {
-        testoStato.textContent = "Il tuo browser non supporta il MIDI. Usa Chrome o Edge.";
-        return;
+  if (!navigator.requestMIDIAccess) {
+    testoStato.textContent = "Il tuo browser non supporta il MIDI. Usa Chrome o Edge.";
+    return;
+  }
+
+  try {
+    const midiAccess = await navigator.requestMIDIAccess();
+    const inputs = Array.from(midiAccess.inputs.values());
+
+    if (inputs.length === 0) {
+      testoStato.textContent = "Nessuna tastiera rilevata. Controlla il cavo USB.";
+      return;
     }
 
-    try {
-        const midiAccess = await navigator.requestMIDIAccess();
-        const inputs = Array.from(midiAccess.inputs.values());
+    inputs.forEach(input => {
+      input.onmidimessage = gestisciMessaggioMidi;
+    });
 
-        if (inputs.length === 0) {
-            testoStato.textContent = "Nessuna tastiera rilevata. Controlla il cavo USB.";
-            return;
-        }
-
-        inputs.forEach(input => {
-            input.onmidimessage = gestisciMessaggioMidi;
-        });
-
-        btnMidi.classList.add('attivo');
-        testoStato.textContent = "Collegato a: " + inputs.at(0).name;
-    } catch (errore) {
-        testoStato.textContent = "Errore collegamento MIDI: " + errore.message;
-    }
+    btnMidi.classList.add('attivo');
+    testoStato.textContent = "Collegato a: " + inputs.at(0).name;
+  } catch (errore) {
+    testoStato.textContent = "Errore collegamento MIDI: " + errore.message;
+  }
 });
 
-function gestisciMessaggioMidi(messaggio) {
-    const comando = messaggio.data.at(0);
-    const notaMidi = messaggio.data.at(1);
-    const velocita = messaggio.data.at(2);
+let ultimaNotaMidiTime = {};
 
-    if (comando === 144 && velocita > 0) {
-        gestisciNotaPremuta(notaMidi);
-    } else if (comando === 128 || (comando === 144 && velocita === 0)) {
-        gestisciNotaRilasciata(notaMidi);
-    }
+function gestisciMessaggioMidi(messaggio) {
+  if (!messaggio.data || messaggio.data.length < 3) return;
+  const comando = messaggio.data.at(0) & 0xf0;
+  const notaMidi = messaggio.data.at(1);
+  const velocita = messaggio.data.at(2);
+
+  if (comando === 144 && velocita > 0) {
+    // Filtro anti-rimbalzo (ignora doppi segnali entro 40ms sulla stessa nota)
+    const ora = performance.now();
+    if (ultimaNotaMidiTime[notaMidi] && (ora - ultimaNotaMidiTime[notaMidi]) < 40) return;
+    ultimaNotaMidiTime[notaMidi] = ora;
+
+    gestisciNotaPremuta(notaMidi);
+  } else if (comando === 128 || (comando === 144 && velocita === 0)) {
+    gestisciNotaRilasciata(notaMidi);
+  }
 }
 
 let ascoltoMicAttivo = false;
