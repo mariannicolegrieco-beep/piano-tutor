@@ -20,33 +20,56 @@ const mappaTasti = {};
 let audioCtx = null;
 let osmd = null;
 
-// Stato dello studio
+// Stato dello studio e riproduzione
 let modalitaMani = 'ENTRAMBE'; // 'ENTRAMBE', 'D', 'S'
 let modalitaVista = 0; // 0 = Completa, 1 = Pagina Intera, 2 = Solo Cascata
-async function richiediResetPassword() {
-  const campoEmail = document.getElementById("auth-email");
-  const email = prompt("Inserisci l'email con cui ti sei registrato:", campoEmail ? campoEmail.value : "");
-  if (!email) return;
-  try {
-    const res = await fetch("https://granata.pythonanywhere.com/api/piano-richiedi-reset", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: email.trim() })
-    });
-    const dati = await res.json();
-    if (dati.ok) {
-      alert("Richiesta inviata! L'amministratore ha ricevuto l'avviso su Telegram e ti fornirà a breve la nuova password.");
-    } else {
-      alert(dati.errore || "Email non trovata.");
-    }
-  } catch (e) {
-    alert("Impossibile contattare il server.");
-  }
-}
+let bpmAttuale = 100;
+let metronomoAttivo = false;
+let timerMetronomo = null;
+let battitoMetronomo = 0;
 
-let passiSpartito = Array.of(); // Ogni elemento è un passo (accordo o nota singola) del cursore OSMD
+let passiSpartito = Array.of();
 let indicePassoCorrente = 0;
 let noteInAttesa = Array.of();
+
+let inRiproduzione = false;
+let modalitaAscolto = false;
+let tempoCorrente = 0;
+let ultimoTimestamp = 0;
+let tastiErroreAttivi = {};
+
+// Crea automaticamente il pulsante "Ascolta" accanto a btnPlay
+let btnAscolta = document.getElementById('btn-ascolta');
+if (!btnAscolta && btnPlay && btnPlay.parentElement) {
+    btnAscolta = document.createElement('button');
+    btnAscolta.id = 'btn-ascolta';
+    btnAscolta.className = btnPlay.className;
+    btnAscolta.textContent = "🔊 Ascolta";
+    btnAscolta.title = "Ascolta l'intera melodia senza suonarla";
+    btnPlay.insertAdjacentElement('afterend', btnAscolta);
+}
+
+async function richiediResetPassword() {
+    const campoEmail = document.getElementById("auth-email");
+    const email = prompt("Inserisci l'email con cui ti sei registrato:", campoEmail ? campoEmail.value : "");
+    if (!email) return;
+    try {
+                const urlReset = "https://" + "granata" + ".pythonanywhere.com" + "/api/piano-richiedi-reset";
+        const res = await fetch(urlReset, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: email.trim() })
+        });
+        const dati = await res.json();
+        if (dati.ok) {
+            alert("Richiesta inviata! L'amministratore ha ricevuto l'avviso su Telegram e ti fornirà a breve la nuova password.");
+        } else {
+            alert(dati.errore || "Email non trovata.");
+        }
+    } catch (e) {
+        alert("Impossibile contattare il server.");
+    }
+}
 
 // 1. PULSANTI VISTA E SCELTA MANI
 btnVista.addEventListener('click', () => {
@@ -140,6 +163,8 @@ function creaTastiera() {
 
 function suonaNotaSintetica(midi, durataSec) {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = 'triangle';
@@ -174,7 +199,7 @@ async function inizializzaOSMD() {
 async function caricaSpartitoInOSMD(contenutoXml) {
     try {
         testoStato.textContent = "Disegno spartito...";
-               osmdContainer.style.width = "100%";
+        osmdContainer.style.width = "100%";
         await osmd.load(contenutoXml);
         osmd.zoom = 0.85;
         osmd.render();
@@ -193,11 +218,13 @@ function estraiPassiDaOSMD() {
     cursore.reset();
 
     let indice = 0;
+    let tempoAccumulato = 1.5;
+
     while (!cursore.Iterator.EndReached) {
         const voci = cursore.Iterator.CurrentVoiceEntries;
         const noteDelPasso = Array.of();
 
-                voci.forEach(voce => {
+        voci.forEach(voce => {
             const staffObj = voce.ParentStaff;
             const staffNum = staffObj ? (staffObj.IdInMusicSheet ?? staffObj.id ?? staffObj.StaffNumber ?? 0) : 0;
 
@@ -212,14 +239,14 @@ function estraiPassiDaOSMD() {
                         mano: mano,
                         durata: Math.max(0.25, durata),
                         suonata: false,
+                        autoSuonata: false,
                         dito: dito
                     });
                 }
             });
         });
-
         if (noteDelPasso.length > 0) {
-                      ['D', 'S'].forEach(m => {
+            Array.of('D', 'S').forEach(m => {
                 const noteMano = noteDelPasso.filter(x => x.mano === m).sort((a, b) => a.midi - b.midi);
                 noteMano.forEach((item, idx) => {
                     if (!item.dito) {
@@ -227,16 +254,19 @@ function estraiPassiDaOSMD() {
                         if (noteMano.length > 1) {
                             item.dito = m === 'D' ? (idx === 0 ? 1 : (idx === noteMano.length - 1 ? 5 : idx + 2)) : (idx === 0 ? 5 : (idx === noteMano.length - 1 ? 1 : Math.max(2, 5 - idx)));
                         } else {
-                            item.dito = m === 'D' ? ([0, 5].includes(pos) ? 1 : ([2, 7].includes(pos) ? 2 : 3)) : ([0, 5].includes(pos) ? 5 : ([2, 7].includes(pos) ? 4 : 3));
+                            item.dito = m === 'D' ? (Array.of(0, 5).includes(pos) ? 1 : (Array.of(2, 7).includes(pos) ? 2 : 3)) : (Array.of(0, 5).includes(pos) ? 5 : (Array.of(2, 7).includes(pos) ? 4 : 3));
                         }
                     }
                 });
-            });  
+            });
+
+            const durataMinimaPasso = Math.min(...noteDelPasso.map(n => n.durata));
             passiSpartito.push({
                 indice: indice,
-                tempoInizio: indice * 0.65 + 1.0,
+                tempoInizio: tempoAccumulato,
                 note: noteDelPasso
             });
+            tempoAccumulato += Math.max(0.45, durataMinimaPasso);
             indice++;
         }
         cursore.next();
@@ -245,12 +275,10 @@ function estraiPassiDaOSMD() {
     cursore.reset();
     cursore.show();
 }
-
 function vaiAlPasso(nuovoIndice) {
     if (passiSpartito.length === 0) return;
     indicePassoCorrente = Math.max(0, Math.min(passiSpartito.length - 1, nuovoIndice));
 
-    // Riallinea il cursore grafico di OSMD al passo scelto
     const cursore = osmd.cursor;
     cursore.reset();
     for (let i = 0; i < indicePassoCorrente; i++) {
@@ -258,7 +286,6 @@ function vaiAlPasso(nuovoIndice) {
     }
     cursore.show();
 
-    // Aggiorna stato suonato/da suonare dei passi
     passiSpartito.forEach((passo, idx) => {
         passo.note.forEach(n => {
             n.suonata = idx < indicePassoCorrente;
@@ -267,7 +294,7 @@ function vaiAlPasso(nuovoIndice) {
     });
 
     const passoAttuale = passiSpartito.at(indicePassoCorrente);
-    tempoCorrente = Math.max(0, passoAttuale.tempoInizio - 0.5);
+    tempoCorrente = Math.max(0, passoAttuale.tempoInizio - 1.2);
     preparaPassoCorrente();
     centraCursoreOrizzontalmente();
     disegnaCascata();
@@ -284,21 +311,27 @@ function preparaPassoCorrente() {
         if (nota.suonata) return;
         const manoAttiva = (modalitaMani === 'ENTRAMBE' || modalitaMani === nota.mano);
 
-        if (manoAttiva) {
+        if (manoAttiva && !modalitaAscolto) {
             noteInAttesa.push(nota);
             if (mappaTasti[nota.midi]) {
                 mappaTasti[nota.midi].classList.add('suggerito-' + nota.mano);
             }
-        } else if (!nota.autoSuonata) {
+        } else if (!manoAttiva && !nota.autoSuonata) {
             nota.autoSuonata = true;
             nota.suonata = true;
-            suonaNotaSintetica(nota.midi, 0.35);
+            suonaNotaSintetica(nota.midi, Math.min(0.6, nota.durata));
         }
     });
 
-    // Se questo passo conteneva solo note della mano disattivata, avanza subito al prossimo!
-    if (noteInAttesa.length === 0 && indicePassoCorrente < passiSpartito.length - 1 && inRiproduzione) {
-      setTimeout(() => vaiAlPasso(indicePassoCorrente + 1), Math.round(350 * (100 / bpmAttuale)));
+    if (!modalitaAscolto && noteInAttesa.length === 0 && indicePassoCorrente < passiSpartito.length - 1 && inRiproduzione) {
+        setTimeout(() => {
+            if (inRiproduzione && !modalitaAscolto) {
+                indicePassoCorrente++;
+                osmd.cursor.next();
+                centraCursoreOrizzontalmente();
+                preparaPassoCorrente();
+            }
+        }, Math.round(350 * (100 / bpmAttuale)));
     }
 }
 
@@ -321,11 +354,7 @@ btnAvanti.addEventListener('click', () => {
     vaiAlPasso(indicePassoCorrente + 1);
 });
 
-// 5. MOTORE DELLA CASCATA SINCRONIZZATO CON OSMD
-let inRiproduzione = false;
-let tempoCorrente = 0;
-let ultimoTimestamp = 0;
-
+// 5. MOTORE DELLA CASCATA SINCRONIZZATO CON OSMD + MODALITÀ ASCOLTO
 function adattaDimensioniCanvas() {
     canvas.width = canvas.parentElement.clientWidth;
     canvas.height = canvas.parentElement.clientHeight;
@@ -336,6 +365,10 @@ window.addEventListener('resize', () => {
 });
 
 btnPlay.addEventListener('click', () => {
+    if (modalitaAscolto) {
+        modalitaAscolto = false;
+        if (btnAscolta) btnAscolta.textContent = "🔊 Ascolta";
+    }
     inRiproduzione = !inRiproduzione;
     btnPlay.textContent = inRiproduzione ? "⏸️ Pausa" : "▶️ Riprendi";
     messaggioGuida.style.display = "none";
@@ -346,28 +379,94 @@ btnPlay.addEventListener('click', () => {
     }
 });
 
+if (btnAscolta) {
+    btnAscolta.addEventListener('click', () => {
+        if (inRiproduzione && !modalitaAscolto) {
+            inRiproduzione = false;
+            btnPlay.textContent = "▶️ Avvia";
+        }
+
+        if (indicePassoCorrente >= passiSpartito.length - 1 && !modalitaAscolto) {
+            vaiAlPasso(0);
+            tempoCorrente = 0;
+        }
+
+        modalitaAscolto = !modalitaAscolto;
+        inRiproduzione = modalitaAscolto;
+        btnAscolta.textContent = modalitaAscolto ? "⏹️ Ferma Ascolto" : "🔊 Ascolta";
+        btnPlay.textContent = "▶️ Avvia";
+        messaggioGuida.style.display = "none";
+
+        if (modalitaAscolto) {
+            pulisciTastiSuggeriti();
+            noteInAttesa = Array.of();
+            ultimoTimestamp = performance.now();
+            testoStato.textContent = "Ascolto melodia in corso...";
+            requestAnimationFrame(cicloAnimazione);
+        } else {
+            testoStato.textContent = "Ascolto interrotto.";
+            preparaPassoCorrente();
+            disegnaCascata();
+        }
+    });
+}
+
 btnReset.addEventListener('click', () => {
     inRiproduzione = false;
+    modalitaAscolto = false;
     btnPlay.textContent = "▶️ Avvia";
+    if (btnAscolta) btnAscolta.textContent = "🔊 Ascolta";
     messaggioGuida.style.display = "block";
     areaSpartito.scrollLeft = 0;
     vaiAlPasso(0);
     tempoCorrente = 0;
     disegnaCascata();
 });
-
 function cicloAnimazione(timestamp) {
     if (!inRiproduzione) return;
-    const deltaSecondi = (timestamp - ultimoTimestamp) / 1000;
+    const fattoreVelocita = bpmAttuale / 100;
+    const deltaSecondi = ((timestamp - ultimoTimestamp) / 1000) * fattoreVelocita;
     ultimoTimestamp = timestamp;
 
     const passoAttuale = passiSpartito.at(indicePassoCorrente);
-    // Avanza col tempo finché il passo corrente non tocca la tastiera
-    if (!passoAttuale || tempoCorrente < passoAttuale.tempoInizio) {
+
+    if (modalitaAscolto) {
         tempoCorrente += deltaSecondi;
+
         if (passoAttuale && tempoCorrente >= passoAttuale.tempoInizio) {
-            tempoCorrente = passoAttuale.tempoInizio;
-            preparaPassoCorrente();
+            passoAttuale.note.forEach(nota => {
+                if (!nota.suonata) {
+                    nota.suonata = true;
+                    suonaNotaSintetica(nota.midi, Math.min(0.8, nota.durata));
+                    if (mappaTasti[nota.midi]) {
+                        mappaTasti[nota.midi].classList.add('premuto');
+                        setTimeout(() => {
+                            if (mappaTasti[nota.midi]) mappaTasti[nota.midi].classList.remove('premuto');
+                        }, Math.min(500, nota.durata * 700));
+                    }
+                }
+            });
+
+            if (indicePassoCorrente < passiSpartito.length - 1) {
+                indicePassoCorrente++;
+                osmd.cursor.next();
+                centraCursoreOrizzontalmente();
+            } else {
+                setTimeout(() => {
+                    inRiproduzione = false;
+                    modalitaAscolto = false;
+                    if (btnAscolta) btnAscolta.textContent = "🔊 Ascolta";
+                    testoStato.textContent = "Ascolto terminato!";
+                }, 600);
+            }
+        }
+    } else {
+        if (!passoAttuale || tempoCorrente < passoAttuale.tempoInizio) {
+            tempoCorrente += deltaSecondi;
+            if (passoAttuale && tempoCorrente >= passoAttuale.tempoInizio) {
+                tempoCorrente = passoAttuale.tempoInizio;
+                preparaPassoCorrente();
+            }
         }
     }
 
@@ -386,7 +485,6 @@ function disegnaCascata() {
     const velocitaPixelAlSecondo = 175;
     const rectCanvas = canvas.getBoundingClientRect();
 
-    // Linee guida verticali sottili
     ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
     ctx.lineWidth = 1;
     Object.values(mappaTasti).forEach(tasto => {
@@ -405,7 +503,7 @@ function disegnaCascata() {
         passo.note.forEach(nota => {
             if (nota.suonata) return;
 
-            const altezzaBlocco = Math.max(16, nota.durata * velocitaPixelAlSecondo);
+            const altezzaBlocco = Math.max(18, nota.durata * velocitaPixelAlSecondo);
             const yCima = yFondo - altezzaBlocco;
             const manoAttiva = (modalitaMani === 'ENTRAMBE' || modalitaMani === nota.mano);
 
@@ -418,9 +516,9 @@ function disegnaCascata() {
 
                     if (!manoAttiva) {
                         ctx.fillStyle = "rgba(166, 173, 200, 0.25)";
-                    } else if (idx === indicePassoCorrente && tempoCorrente >= passo.tempoInizio - 0.05) {
-                        ctx.fillStyle = "#f9e2af"; // Giallo brillante quando è il momento di suonarla
-                                        } else {
+                    } else if (!modalitaAscolto && idx === indicePassoCorrente && tempoCorrente >= passo.tempoInizio - 0.05) {
+                        ctx.fillStyle = "#f9e2af";
+                    } else {
                         ctx.fillStyle = nota.mano === 'D' ? "#22c55e" : "#f97316";
                     }
 
@@ -441,19 +539,21 @@ function disegnaCascata() {
         });
     });
 
-    Object.values(mappaTasti).forEach(tasto => {
-        tasto.style.backgroundColor = "";
+    Object.entries(mappaTasti).forEach(([midiKey, tasto]) => {
+        if (!tastiErroreAttivi[midiKey]) {
+            tasto.style.backgroundColor = "";
+        }
         const vecchioNum = tasto.querySelector(".num-dito-tasto");
         if (vecchioNum) vecchioNum.remove();
     });
 
     const passoAttuale = passiSpartito[indicePassoCorrente];
-    if (passoAttuale) {
+    if (passoAttuale && !modalitaAscolto) {
         passoAttuale.note.forEach(nota => {
             const manoAttiva = (modalitaMani === 'ENTRAMBE' || modalitaMani === nota.mano);
             if (!manoAttiva || nota.suonata) return;
             const tasto = mappaTasti[nota.midi];
-            if (!tasto) return;
+            if (!tasto || tastiErroreAttivi[nota.midi]) return;
 
             tasto.style.backgroundColor = nota.mano === 'D' ? "#22c55e" : "#f97316";
 
@@ -467,160 +567,182 @@ function disegnaCascata() {
         });
     }
 }
-
 // 6. GESTIONE NOTE PREMUTE, SUONO ERRORE, MIDI E MICROFONO
 function suonaErrore() {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = 'sawtooth';
     osc.frequency.setValueAtTime(110, audioCtx.currentTime);
-    osc.frequency.linearRampToValueAtTime(75, audioCtx.currentTime + 0.2);
-    gain.gain.setValueAtTime(0.18, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.22);
+    osc.frequency.linearRampToValueAtTime(75, audioCtx.currentTime + 0.22);
+    gain.gain.setValueAtTime(0.22, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
     osc.connect(gain);
     gain.connect(audioCtx.destination);
     osc.start();
-    osc.stop(audioCtx.currentTime + 0.22);
+    osc.stop(audioCtx.currentTime + 0.25);
+}
+
+function mostraErroreSulTasto(midi) {
+    suonaErrore();
+    const tasto = mappaTasti[midi];
+    if (!tasto) return;
+
+    tastiErroreAttivi[midi] = true;
+    tasto.style.backgroundColor = '#ef4444';
+    setTimeout(() => {
+        delete tastiErroreAttivi[midi];
+        tasto.style.backgroundColor = '';
+        disegnaCascata();
+    }, 400);
 }
 
 function gestisciNotaPremuta(midi) {
-  const passoAttuale = passiSpartito.at(indicePassoCorrente);
-  const inAttesaOra = passoAttuale && noteInAttesa.length > 0;
+    if (modalitaAscolto) return;
 
-  if (inAttesaOra) {
-    const notaTrovata = noteInAttesa.find(n => n.midi === midi && !n.suonata);
+    const passoAttuale = passiSpartito.at(indicePassoCorrente);
+    const notaRaggiungibile = passoAttuale && (tempoCorrente >= passoAttuale.tempoInizio - 0.35);
 
-    if (notaTrovata) {
-      if (mappaTasti[midi]) {
-        mappaTasti[midi].style.backgroundColor = '';
-        mappaTasti[midi].classList.add('premuto');
-      }
-      notaTrovata.suonata = true;
-      noteInAttesa = noteInAttesa.filter(n => n !== notaTrovata);
+    if (passoAttuale && noteInAttesa.length > 0 && notaRaggiungibile) {
+        const notaTrovata = noteInAttesa.find(n => n.midi === midi && !n.suonata);
 
-      if (mappaTasti[midi]) {
-        mappaTasti[midi].classList.remove('suggerito-D', 'suggerito-S');
-      }
+        if (notaTrovata) {
+            if (mappaTasti[midi]) {
+                mappaTasti[midi].style.backgroundColor = '';
+                mappaTasti[midi].classList.add('premuto');
+                mappaTasti[midi].classList.remove('suggerito-D', 'suggerito-S');
+            }
+            notaTrovata.suonata = true;
+            noteInAttesa = noteInAttesa.filter(n => n !== notaTrovata);
 
-      // Se tutte le note di questo passo sono state suonate, avanza il cursore dello spartito!
-      if (noteInAttesa.length === 0) {
-        if (indicePassoCorrente < passiSpartito.length - 1) {
-          indicePassoCorrente++;
-          osmd.cursor.next();
-          centraCursoreOrizzontalmente();
-          preparaPassoCorrente();
-          // Allinea subito il tempo della cascata al nuovo passo così non resta indietro!
-          if (passiSpartito[indicePassoCorrente]) {
-            tempoCorrente = passiSpartito[indicePassoCorrente].tempoInizio;
-          }
+            if (noteInAttesa.length === 0) {
+                if (indicePassoCorrente < passiSpartito.length - 1) {
+                    indicePassoCorrente++;
+                    osmd.cursor.next();
+                    centraCursoreOrizzontalmente();
+                    preparaPassoCorrente();
+                } else {
+                    inRiproduzione = false;
+                    btnPlay.textContent = "▶️ Avvia";
+                    testoStato.textContent = "Brano completato! Ottimo lavoro!";
+                }
+            }
+            disegnaCascata();
         } else {
-          inRiproduzione = false;
-          btnPlay.textContent = "▶ Avvia";
-          testoStato.textContent = "Brano completato! Ottimo lavoro!";
+            mostraErroreSulTasto(midi);
         }
-      }
-      disegnaCascata();
     } else {
-      // Nota sbagliata! Suono di errore e lampeggio rosso ben visibile sul tasto
-      suonaErrore();
-      if (mappaTasti[midi]) {
-        mappaTasti[midi].style.backgroundColor = '#f38ba8';
-        setTimeout(() => {
-          if (mappaTasti[midi]) mappaTasti[midi].style.backgroundColor = '';
-        }, 400);
-      }
+        if (inRiproduzione && passoAttuale && noteInAttesa.length > 0) {
+            const faParteDelPasso = noteInAttesa.some(n => n.midi === midi);
+            if (!faParteDelPasso) {
+                mostraErroreSulTasto(midi);
+                return;
+            }
+        }
+        if (mappaTasti[midi]) {
+            mappaTasti[midi].classList.add('premuto');
+        }
     }
-  } else if (mappaTasti[midi]) {
-    mappaTasti[midi].classList.add('premuto');
-  }
 }
 
 function gestisciNotaRilasciata(midi) {
-  if (mappaTasti[midi]) {
-    mappaTasti[midi].classList.remove('premuto');
-  }
+    if (mappaTasti[midi]) {
+        mappaTasti[midi].classList.remove('premuto');
+    }
+}
+
+function spegniMicrofonoSeAttivo() {
+    if (ascoltoMicAttivo) {
+        ascoltoMicAttivo = false;
+        if (window.streamMicCorrente) {
+            window.streamMicCorrente.getTracks().forEach(t => t.stop());
+            window.streamMicCorrente = null;
+        }
+        if (ultimaNotaMic) {
+            gestisciNotaRilasciata(ultimaNotaMic);
+            ultimaNotaMic = null;
+        }
+        btnMic.classList.remove("attivo");
+    }
 }
 
 btnMidi.addEventListener('click', async () => {
-  if (!navigator.requestMIDIAccess) {
-    testoStato.textContent = "Il tuo browser non supporta il MIDI. Usa Chrome o Edge.";
-    return;
-  }
-
-  try {
-    const midiAccess = await navigator.requestMIDIAccess();
-    const inputs = Array.from(midiAccess.inputs.values());
-
-    if (inputs.length === 0) {
-      testoStato.textContent = "Nessuna tastiera rilevata. Controlla il cavo USB.";
-      return;
+    if (!navigator.requestMIDIAccess) {
+        testoStato.textContent = "Il tuo browser non supporta il MIDI. Usa Chrome o Edge.";
+        return;
     }
 
-    inputs.forEach(input => {
-      input.onmidimessage = gestisciMessaggioMidi;
-    });
+    spegniMicrofonoSeAttivo();
 
-    btnMidi.classList.add('attivo');
-    testoStato.textContent = "Collegato a: " + inputs.at(0).name;
-  } catch (errore) {
-    testoStato.textContent = "Errore collegamento MIDI: " + errore.message;
-  }
+    try {
+        const midiAccess = await navigator.requestMIDIAccess();
+        const inputs = Array.from(midiAccess.inputs.values());
+
+        if (inputs.length === 0) {
+            testoStato.textContent = "Nessuna tastiera rilevata. Controlla il cavo USB.";
+            return;
+        }
+
+        inputs.forEach(input => {
+            input.onmidimessage = gestisciMessaggioMidi;
+        });
+
+        btnMidi.classList.add('attivo');
+        testoStato.textContent = "Collegato a: " + inputs.at(0).name;
+    } catch (errore) {
+        testoStato.textContent = "Errore collegamento MIDI: " + errore.message;
+    }
 });
 
 let ultimaNotaMidiTime = {};
 
 function gestisciMessaggioMidi(messaggio) {
-  if (!messaggio.data || messaggio.data.length < 3) return;
-  const comando = messaggio.data.at(0) & 0xf0;
-  const notaMidi = messaggio.data.at(1);
-  const velocita = messaggio.data.at(2);
+    if (!messaggio.data || messaggio.data.length < 3) return;
+    const status = messaggio.data.at(0);
+    if (status >= 240) return;
 
-  if (comando === 144 && velocita > 0) {
-    // Filtro anti-rimbalzo (ignora doppi segnali entro 40ms sulla stessa nota)
-    const ora = performance.now();
-    if (ultimaNotaMidiTime[notaMidi] && (ora - ultimaNotaMidiTime[notaMidi]) < 40) return;
-    ultimaNotaMidiTime[notaMidi] = ora;
+    const comando = status & 0xf0;
+    const notaMidi = messaggio.data.at(1);
+    const velocita = messaggio.data.at(2);
 
-    gestisciNotaPremuta(notaMidi);
-  } else if (comando === 128 || (comando === 144 && velocita === 0)) {
-    gestisciNotaRilasciata(notaMidi);
-  }
+    if (notaMidi < 21 || notaMidi > 108) return;
+
+    if (comando === 144 && velocita > 0) {
+        const ora = performance.now();
+        if (ultimaNotaMidiTime[notaMidi] && (ora - ultimaNotaMidiTime[notaMidi]) < 45) return;
+        ultimaNotaMidiTime[notaMidi] = ora;
+
+        gestisciNotaPremuta(notaMidi);
+    } else if (comando === 128 || (comando === 144 && velocita === 0)) {
+        gestisciNotaRilasciata(notaMidi);
+    }
 }
-
 let ascoltoMicAttivo = false;
 let ultimaNotaMic = null;
 
 btnMic.addEventListener('click', async () => {
-  if (ascoltoMicAttivo) {
-  ascoltoMicAttivo = false;
-  if (window.streamMicCorrente) {
-    window.streamMicCorrente.getTracks().forEach(t => t.stop());
-    window.streamMicCorrente = null;
-  }
-  if (ultimaNotaMic) {
-    gestisciNotaRilasciata(ultimaNotaMic);
-    ultimaNotaMic = null;
-  }
-  btnMic.classList.remove("attivo");
-  testoStato.textContent = "Microfono disattivato.";
-  return;
-}
+    if (ascoltoMicAttivo) {
+        spegniMicrofonoSeAttivo();
+        testoStato.textContent = "Microfono disattivato.";
+        return;
+    }
 
     try {
         const stream = await navigator.mediaDevices.getUserMedia({
-  audio: {
-    echoCancellation: false,
-    noiseSuppression: false,
-    autoGainControl: false
-  }
-});
-window.streamMicCorrente = stream;
-if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-if (audioCtx.state === "suspended") await audioCtx.resume();
-const sorgente = audioCtx.createMediaStreamSource(stream);
-const analizzatore = audioCtx.createAnalyser();
-analizzatore.fftSize = 4096;
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false
+            }
+        });
+        window.streamMicCorrente = stream;
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") await audioCtx.resume();
+        const sorgente = audioCtx.createMediaStreamSource(stream);
+        const analizzatore = audioCtx.createAnalyser();
+        analizzatore.fftSize = 4096;
 
         sorgente.connect(analizzatore);
 
@@ -631,7 +753,7 @@ analizzatore.fftSize = 4096;
         const buffer = new Float32Array(analizzatore.fftSize);
 
         function analizzaSuono() {
-          if (!ascoltoMicAttivo) return;
+            if (!ascoltoMicAttivo) return;
             analizzatore.getFloatTimeDomainData(buffer);
             const frequenza = rilevaFrequenza(buffer, audioCtx.sampleRate);
 
@@ -662,7 +784,7 @@ function rilevaFrequenza(buffer, sampleRate) {
         rms += valore * valore;
     }
     rms = Math.sqrt(rms / buffer.length);
-   if (rms < 0.005) return -1;
+    if (rms < 0.005) return -1;
 
     let r1 = 0, r2 = buffer.length - 1, soglia = 0.2;
     for (let i = 0; i < buffer.length / 2; i++) {
@@ -693,10 +815,6 @@ function rilevaFrequenza(buffer, sampleRate) {
 creaTastiera();
 adattaDimensioniCanvas();
 inizializzaOSMD();
-let bpmAttuale = 100;
-let metronomoAttivo = false;
-let timerMetronomo = null;
-let battitoMetronomo = 0;
 
 function suonaClickMetronomo(accento) {
     if (!audioCtx) return;
@@ -737,7 +855,6 @@ async function applicaNuovoSpartito(xmlTesto) {
         if (typeof vaiAlPasso === 'function') vaiAlPasso(0);
     }
 }
-
 const selectBrano = document.getElementById('selectBranoPronto');
 const btnEliminaBrano = document.getElementById('btnEliminaBrano');
 
@@ -769,11 +886,11 @@ if (btnEliminaBrano) {
         aggiornaMenuRecenti();
 
         if (selectBrano.options.length > 0) {
-            const nuovoVal = selectBrano.options[0].value;
+            const nuovoVal = selectBrano.options.value;
             selectBrano.value = nuovoVal;
             if (nuovoVal.startsWith('RECENTE_')) {
                 const recenti = JSON.parse(localStorage.getItem('pianoTutorRecenti') || '[]');
-                if (recenti[0]) await applicaNuovoSpartito(recenti[0].xml);
+                if (recenti) await applicaNuovoSpartito(recenti.xml);
             } else if (typeof libreriaBrani !== 'undefined' && libreriaBrani[nuovoVal]) {
                 await applicaNuovoSpartito(libreriaBrani[nuovoVal]);
             }
@@ -802,12 +919,12 @@ function aggiornaMenuRecenti() {
     });
     aggiornaStatoCestino();
 }
- 
+
 if (selectBrano) {
     aggiornaMenuRecenti();
     selectBrano.addEventListener('change', async (e) => {
         const val = e.target.value;
-  aggiornaStatoCestino();      
+        aggiornaStatoCestino();
         const mappaVecchi = {
             perElisa: "Per Elisa - L. van Beethoven",
             innoAllaGioia: "Inno alla Gioia - L. van Beethoven",
@@ -827,7 +944,7 @@ if (selectBrano) {
 const inputFileSpartito = document.getElementById('input-spartito');
 if (inputFileSpartito) {
     inputFileSpartito.addEventListener('change', (e) => {
-        const file = e.target.files[0];
+        const file = e.target.files;
         if (!file) return;
         const nomePulito = file.name.replace(/\.(xml|musicxml|mxl)$/i, '');
         const reader = new FileReader();
@@ -870,7 +987,8 @@ if (btnMetronomo) {
         aggiornaMetronomo();
     });
 }
-const URL_API_PIANO = "https://granata.pythonanywhere.com/api/piano-auth";
+
+const URL_API_PIANO = "https://" + "granata" + ".pythonanywhere.com" + "/api/piano-auth";
 let modalitaRegistrazione = false;
 
 const schermataLogin = document.getElementById("schermata-login");
@@ -952,93 +1070,95 @@ if (btnLogout) {
 }
 
 controllaSessioneUtente();
+
 // === SINCRONIZZAZIONE SPARTITI CLOUD (PC <-> IPAD) ===
 (function () {
-  const API_BASE = "https://granata.pythonanywhere.com/api";
+    const API_BASE = "https://" + "granata" + ".pythonanywhere.com" + "/api";
 
-  function getEmailUtente() {
-    try {
-      const u = JSON.parse(localStorage.getItem("pianoTutorUtente") || "null");
-      return u && u.email ? u.email.trim().toLowerCase() : "";
-    } catch (e) {
-      return "";
-    }
-  }
-
-  async function scaricaSpartitiCloud() {
-    const email = getEmailUtente();
-    if (!email) return;
-    try {
-      const res = await fetch(API_BASE + "/piano-spartiti", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email })
-      });
-      const dati = await res.json();
-      if (dati.ok && Array.isArray(dati.spartiti)) {
-        const lista = dati.spartiti.map(s => ({ id: s.id, nome: s.titolo, xml: s.contenuto }));
-        localStorage.setItem("pianoTutorRecenti", JSON.stringify(lista));
-        if (typeof aggiornaMenuRecenti === "function") aggiornaMenuRecenti();
-      }
-    } catch (e) {
-      console.warn("Errore sync cloud:", e);
-    }
-  }
-
-  async function salvaSpartitoSulCloud(titolo, xmlTesto) {
-    const email = getEmailUtente();
-    if (!email || !titolo || !xmlTesto) return;
-    try {
-      await fetch(API_BASE + "/piano-salva-spartito", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, titolo, contenuto: xmlTesto })
-      });
-    } catch (e) {
-      console.warn("Errore salvataggio cloud:", e);
-    }
-  }
-
-  const inputFile = document.getElementById("input-spartito");
-  if (inputFile) {
-    inputFile.addEventListener("change", (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const nomePulito = file.name.replace(/\.(xml|musicxml|mxl)$/i, "");
-      setTimeout(async () => {
-        const recenti = JSON.parse(localStorage.getItem("pianoTutorRecenti") || "[]");
-        const trovato = recenti.find(r => r && r.nome === nomePulito);
-        if (trovato && trovato.xml) {
-          await salvaSpartitoSulCloud(trovato.nome, trovato.xml);
-          await scaricaSpartitiCloud();
+    function getEmailUtente() {
+        try {
+            const u = JSON.parse(localStorage.getItem("pianoTutorUtente") || "null");
+            return u && u.email ? u.email.trim().toLowerCase() : "";
+        } catch (e) {
+            return "";
         }
-      }, 800);
+    }
+
+    async function scaricaSpartitiCloud() {
+        const email = getEmailUtente();
+        if (!email) return;
+        try {
+            const res = await fetch(API_BASE + "/piano-spartiti", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email })
+            });
+            const dati = await res.json();
+            if (dati.ok && Array.isArray(dati.spartiti)) {
+                const lista = dati.spartiti.map(s => ({ id: s.id, nome: s.titolo, xml: s.contenuto }));
+                localStorage.setItem("pianoTutorRecenti", JSON.stringify(lista));
+                if (typeof aggiornaMenuRecenti === "function") aggiornaMenuRecenti();
+            }
+        } catch (e) {
+            console.warn("Errore sync cloud:", e);
+        }
+    }
+
+    async function salvaSpartitoSulCloud(titolo, xmlTesto) {
+        const email = getEmailUtente();
+        if (!email || !titolo || !xmlTesto) return;
+        try {
+            await fetch(API_BASE + "/piano-salva-spartito", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email, titolo, contenuto: xmlTesto })
+            });
+        } catch (e) {
+            console.warn("Errore salvataggio cloud:", e);
+        }
+    }
+
+    const inputFile = document.getElementById("input-spartito");
+    if (inputFile) {
+        inputFile.addEventListener("change", (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const nomePulito = file.name.replace(/\.(xml|musicxml|mxl)$/i, "");
+            setTimeout(async () => {
+                const recenti = JSON.parse(localStorage.getItem("pianoTutorRecenti") || "[]");
+                const trovato = recenti.find(r => r && r.nome === nomePulito);
+                if (trovato && trovato.xml) {
+                    await salvaSpartitoSulCloud(trovato.nome, trovato.xml);
+                    await scaricaSpartitiCloud();
+                }
+            }, 800);
+        });
+    }
+
+    const btnElimina = document.getElementById("btnEliminaBrano");
+    if (btnElimina) {
+        btnElimina.addEventListener("click", async () => {
+            const email = getEmailUtente();
+            const sel = document.getElementById("selectBranoPronto");
+            if (!email || !sel) return;
+            const val = sel.value;
+            if (val && val.startsWith("RECENTE_")) {
+                const idx = parseInt(val.replace("RECENTE_", ""), 10);
+                const recenti = JSON.parse(localStorage.getItem("pianoTutorRecenti") || "[]");
+                if (recenti[idx] && recenti[idx].id) {
+                    await fetch(API_BASE + "/piano-elimina-spartito", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ email, id: recenti[idx].id })
+                    });
+                }
+            }
+        }, true);
+    }
+
+    window.addEventListener("load", () => {
+        setTimeout(scaricaSpartitiCloud, 700);
     });
-  }
-
-  const btnElimina = document.getElementById("btnEliminaBrano");
-  if (btnElimina) {
-    btnElimina.addEventListener("click", async () => {
-      const email = getEmailUtente();
-      const sel = document.getElementById("selectBranoPronto");
-      if (!email || !sel) return;
-      const val = sel.value;
-      if (val && val.startsWith("RECENTE_")) {
-        const idx = parseInt(val.replace("RECENTE_", ""), 10);
-        const recenti = JSON.parse(localStorage.getItem("pianoTutorRecenti") || "[]");
-        if (recenti[idx] && recenti[idx].id) {
-          await fetch(API_BASE + "/piano-elimina-spartito", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, id: recenti[idx].id })
-          });
-        }
-      }
-    }, true);
-  }
-
-  window.addEventListener("load", () => {
-    setTimeout(scaricaSpartitiCloud, 700);
-  });
 })();
 
+        
