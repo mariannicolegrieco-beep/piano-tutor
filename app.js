@@ -736,7 +736,7 @@ btnMic.addEventListener('click', async () => {
             audio: {
                 echoCancellation: false,
                 noiseSuppression: false,
-                autoGainControl: false
+                autoGainControl: true
             }
         });
         window.streamMicCorrente = stream;
@@ -745,10 +745,9 @@ btnMic.addEventListener('click', async () => {
 
         const sorgente = audioCtx.createMediaStreamSource(stream);
 
-        // Filtro passa-basso per ridurre gli armonici acuti del pianoforte verticale e i fruscii
         const filtroPassaBasso = audioCtx.createBiquadFilter();
         filtroPassaBasso.type = 'lowpass';
-        filtroPassaBasso.frequency.setValueAtTime(1100, audioCtx.currentTime);
+        filtroPassaBasso.frequency.setValueAtTime(1400, audioCtx.currentTime);
         filtroPassaBasso.Q.setValueAtTime(0.7, audioCtx.currentTime);
 
         const analizzatore = audioCtx.createAnalyser();
@@ -761,8 +760,9 @@ btnMic.addEventListener('click', async () => {
         notaCandidataMic = null;
         conteggioStabilitaMic = 0;
         btnMic.classList.add('attivo');
-        testoStato.textContent = "Microfono attivo (modalità piano acustico): suona una nota!";
+        testoStato.textContent = "Microfono attivo: suona una nota sul piano!";
 
+        const nomiNote = Array.of('Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si');
         const buffer = new Float32Array(analizzatore.fftSize);
 
         function analizzaSuono() {
@@ -773,10 +773,11 @@ btnMic.addEventListener('click', async () => {
             if (frequenza !== -1) {
                 const notaMidi = Math.round(12 * (Math.log(frequenza / 440) / Math.log(2)) + 69);
                 if (notaMidi >= 21 && notaMidi <= 108) {
-                    // Richiede 3 letture consecutive uguali prima di confermare la nota (evita falsi positivi)
                     if (notaMidi === notaCandidataMic) {
                         conteggioStabilitaMic++;
-                        if (conteggioStabilitaMic === 3 && notaMidi !== ultimaNotaMic) {
+                        if (conteggioStabilitaMic === 2 && notaMidi !== ultimaNotaMic) {
+                            const nomeNota = nomiNote[notaMidi % 12] + (Math.floor(notaMidi / 12) - 1);
+                            testoStato.textContent = "🎤 Sento: " + nomeNota;
                             if (ultimaNotaMic) gestisciNotaRilasciata(ultimaNotaMic);
                             gestisciNotaPremuta(notaMidi);
                             ultimaNotaMic = notaMidi;
@@ -810,8 +811,7 @@ function rilevaFrequenza(buffer, sampleRate) {
         rms += valore * valore;
     }
     rms = Math.sqrt(rms / buffer.length);
-    // Soglia anti-rumore alzata per ignorare voci di sottofondo, passi e coda della corda
-    if (rms < 0.022) return -1;
+    if (rms < 0.006) return -1;
 
     let r1 = 0, r2 = buffer.length - 1, soglia = 0.2;
     for (let i = 0; i < buffer.length / 2; i++) {
@@ -832,14 +832,13 @@ function rilevaFrequenza(buffer, sampleRate) {
     }
 
     let d = 0;
-    while (d < c.length - 1 && c[d] > c[d + 1]) d++;
+    while (c[d] > c[d + 1]) d++;
     let maxval = -1, maxpos = -1;
     for (let i = d; i < bufTagliato.length; i++) {
         if (c[i] > maxval) { maxval = c[i]; maxpos = i; }
     }
     if (maxpos <= 0) return -1;
 
-    // Controllo anti-salto d'ottava: verifica se esiste un picco forte al doppio del periodo (un'ottava sotto)
     const periodoOttavaInferiore = maxpos * 2;
     if (periodoOttavaInferiore < c.length && c[periodoOttavaInferiore] > maxval * 0.72) {
         maxpos = periodoOttavaInferiore;
