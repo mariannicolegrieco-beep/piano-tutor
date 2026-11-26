@@ -721,6 +721,8 @@ function gestisciMessaggioMidi(messaggio) {
 }
 let ascoltoMicAttivo = false;
 let ultimaNotaMic = null;
+let notaCandidataMic = null;
+let conteggioStabilitaMic = 0;
 
 btnMic.addEventListener('click', async () => {
     if (ascoltoMicAttivo) {
@@ -740,15 +742,26 @@ btnMic.addEventListener('click', async () => {
         window.streamMicCorrente = stream;
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         if (audioCtx.state === "suspended") await audioCtx.resume();
+
         const sorgente = audioCtx.createMediaStreamSource(stream);
+
+        // Filtro passa-basso per ridurre gli armonici acuti del pianoforte verticale e i fruscii
+        const filtroPassaBasso = audioCtx.createBiquadFilter();
+        filtroPassaBasso.type = 'lowpass';
+        filtroPassaBasso.frequency.setValueAtTime(1100, audioCtx.currentTime);
+        filtroPassaBasso.Q.setValueAtTime(0.7, audioCtx.currentTime);
+
         const analizzatore = audioCtx.createAnalyser();
         analizzatore.fftSize = 4096;
 
-        sorgente.connect(analizzatore);
+        sorgente.connect(filtroPassaBasso);
+        filtroPassaBasso.connect(analizzatore);
 
         ascoltoMicAttivo = true;
+        notaCandidataMic = null;
+        conteggioStabilitaMic = 0;
         btnMic.classList.add('attivo');
-        testoStato.textContent = "Microfono attivo: suona una nota sul piano!";
+        testoStato.textContent = "Microfono attivo (modalità piano acustico): suona una nota!";
 
         const buffer = new Float32Array(analizzatore.fftSize);
 
@@ -759,14 +772,27 @@ btnMic.addEventListener('click', async () => {
 
             if (frequenza !== -1) {
                 const notaMidi = Math.round(12 * (Math.log(frequenza / 440) / Math.log(2)) + 69);
-                if (notaMidi >= 21 && notaMidi <= 108 && notaMidi !== ultimaNotaMic) {
-                    if (ultimaNotaMic) gestisciNotaRilasciata(ultimaNotaMic);
-                    gestisciNotaPremuta(notaMidi);
-                    ultimaNotaMic = notaMidi;
+                if (notaMidi >= 21 && notaMidi <= 108) {
+                    // Richiede 3 letture consecutive uguali prima di confermare la nota (evita falsi positivi)
+                    if (notaMidi === notaCandidataMic) {
+                        conteggioStabilitaMic++;
+                        if (conteggioStabilitaMic === 3 && notaMidi !== ultimaNotaMic) {
+                            if (ultimaNotaMic) gestisciNotaRilasciata(ultimaNotaMic);
+                            gestisciNotaPremuta(notaMidi);
+                            ultimaNotaMic = notaMidi;
+                        }
+                    } else {
+                        notaCandidataMic = notaMidi;
+                        conteggioStabilitaMic = 1;
+                    }
                 }
-            } else if (ultimaNotaMic) {
-                gestisciNotaRilasciata(ultimaNotaMic);
-                ultimaNotaMic = null;
+            } else {
+                notaCandidataMic = null;
+                conteggioStabilitaMic = 0;
+                if (ultimaNotaMic) {
+                    gestisciNotaRilasciata(ultimaNotaMic);
+                    ultimaNotaMic = null;
+                }
             }
             requestAnimationFrame(analizzaSuono);
         }
@@ -784,7 +810,8 @@ function rilevaFrequenza(buffer, sampleRate) {
         rms += valore * valore;
     }
     rms = Math.sqrt(rms / buffer.length);
-    if (rms < 0.005) return -1;
+    // Soglia anti-rumore alzata per ignorare voci di sottofondo, passi e coda della corda
+    if (rms < 0.022) return -1;
 
     let r1 = 0, r2 = buffer.length - 1, soglia = 0.2;
     for (let i = 0; i < buffer.length / 2; i++) {
@@ -795,6 +822,8 @@ function rilevaFrequenza(buffer, sampleRate) {
     }
 
     const bufTagliato = buffer.slice(r1, r2);
+    if (bufTagliato.length < 32) return -1;
+
     const c = new Array(bufTagliato.length).fill(0);
     for (let i = 0; i < bufTagliato.length; i++) {
         for (let j = 0; j < bufTagliato.length - i; j++) {
@@ -803,11 +832,19 @@ function rilevaFrequenza(buffer, sampleRate) {
     }
 
     let d = 0;
-    while (c[d] > c[d + 1]) d++;
+    while (d < c.length - 1 && c[d] > c[d + 1]) d++;
     let maxval = -1, maxpos = -1;
     for (let i = d; i < bufTagliato.length; i++) {
         if (c[i] > maxval) { maxval = c[i]; maxpos = i; }
     }
+    if (maxpos <= 0) return -1;
+
+    // Controllo anti-salto d'ottava: verifica se esiste un picco forte al doppio del periodo (un'ottava sotto)
+    const periodoOttavaInferiore = maxpos * 2;
+    if (periodoOttavaInferiore < c.length && c[periodoOttavaInferiore] > maxval * 0.72) {
+        maxpos = periodoOttavaInferiore;
+    }
+
     return sampleRate / maxpos;
 }
 
