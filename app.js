@@ -723,6 +723,8 @@ let ascoltoMicAttivo = false;
 let ultimaNotaMic = null;
 let notaCandidataMic = null;
 let conteggioStabilitaMic = 0;
+let ultimoRmsMic = 0;
+let ultimoTempoNotaMic = 0;
 
 btnMic.addEventListener('click', async () => {
     if (ascoltoMicAttivo) {
@@ -736,7 +738,7 @@ btnMic.addEventListener('click', async () => {
             audio: {
                 echoCancellation: false,
                 noiseSuppression: false,
-                autoGainControl: true
+                autoGainControl: false
             }
         });
         window.streamMicCorrente = stream;
@@ -747,7 +749,7 @@ btnMic.addEventListener('click', async () => {
 
         const filtroPassaBasso = audioCtx.createBiquadFilter();
         filtroPassaBasso.type = 'lowpass';
-        filtroPassaBasso.frequency.setValueAtTime(1400, audioCtx.currentTime);
+        filtroPassaBasso.frequency.setValueAtTime(1500, audioCtx.currentTime);
         filtroPassaBasso.Q.setValueAtTime(0.7, audioCtx.currentTime);
 
         const analizzatore = audioCtx.createAnalyser();
@@ -759,6 +761,7 @@ btnMic.addEventListener('click', async () => {
         ascoltoMicAttivo = true;
         notaCandidataMic = null;
         conteggioStabilitaMic = 0;
+        ultimoRmsMic = 0;
         btnMic.classList.add('attivo');
         testoStato.textContent = "Microfono attivo: suona una nota sul piano!";
 
@@ -768,19 +771,38 @@ btnMic.addEventListener('click', async () => {
         function analizzaSuono() {
             if (!ascoltoMicAttivo) return;
             analizzatore.getFloatTimeDomainData(buffer);
-            const frequenza = rilevaFrequenza(buffer, audioCtx.sampleRate);
+            const risultato = rilevaFrequenzaEVolume(buffer, audioCtx.sampleRate);
 
-            if (frequenza !== -1) {
-                const notaMidi = Math.round(12 * (Math.log(frequenza / 440) / Math.log(2)) + 69);
+            if (risultato.frequenza !== -1) {
+                const midiEsatto = 12 * (Math.log(risultato.frequenza / 440) / Math.log(2)) + 69;
+                let notaMidi = Math.round(midiEsatto);
+
+                // Se il pianoforte acustico è leggermente calante/crescente (entro 0.65 semitoni dalla nota attesa), allinea alla nota attesa
+                if (typeof noteInAttesa !== 'undefined' && noteInAttesa.length > 0) {
+                    const vicinaAttesa = noteInAttesa.find(n => !n.suonata && Math.abs(midiEsatto - n.midi) <= 0.65);
+                    if (vicinaAttesa) {
+                        notaMidi = vicinaAttesa.midi;
+                    }
+                }
+
+                // Rileva se c'è stato un nuovo colpo sul tasto (aumento improvviso di volume rispetto alla coda sonora)
+                const nuovoAttacco = (risultato.rms > ultimoRmsMic * 1.45) && (risultato.rms > 0.012);
+                if (nuovoAttacco) {
+                    ultimaNotaMic = null;
+                    conteggioStabilitaMic = 0;
+                }
+
                 if (notaMidi >= 21 && notaMidi <= 108) {
                     if (notaMidi === notaCandidataMic) {
                         conteggioStabilitaMic++;
-                        if (conteggioStabilitaMic === 2 && notaMidi !== ultimaNotaMic) {
+                        const ora = performance.now();
+                        if (conteggioStabilitaMic >= 2 && (notaMidi !== ultimaNotaMic || (nuovoAttacco && ora - ultimoTempoNotaMic > 180))) {
                             const nomeNota = nomiNote[notaMidi % 12] + (Math.floor(notaMidi / 12) - 1);
                             testoStato.textContent = "🎤 Sento: " + nomeNota;
                             if (ultimaNotaMic) gestisciNotaRilasciata(ultimaNotaMic);
                             gestisciNotaPremuta(notaMidi);
                             ultimaNotaMic = notaMidi;
+                            ultimoTempoNotaMic = ora;
                         }
                     } else {
                         notaCandidataMic = notaMidi;
@@ -795,6 +817,8 @@ btnMic.addEventListener('click', async () => {
                     ultimaNotaMic = null;
                 }
             }
+
+            ultimoRmsMic = risultato.rms;
             requestAnimationFrame(analizzaSuono);
         }
 
@@ -804,14 +828,14 @@ btnMic.addEventListener('click', async () => {
     }
 });
 
-function rilevaFrequenza(buffer, sampleRate) {
+function rilevaFrequenzaEVolume(buffer, sampleRate) {
     let rms = 0;
     for (let i = 0; i < buffer.length; i++) {
         const valore = buffer.at(i);
         rms += valore * valore;
     }
     rms = Math.sqrt(rms / buffer.length);
-    if (rms < 0.006) return -1;
+    if (rms < 0.008) return { frequenza: -1, rms: rms };
 
     let r1 = 0, r2 = buffer.length - 1, soglia = 0.2;
     for (let i = 0; i < buffer.length / 2; i++) {
@@ -822,7 +846,7 @@ function rilevaFrequenza(buffer, sampleRate) {
     }
 
     const bufTagliato = buffer.slice(r1, r2);
-    if (bufTagliato.length < 32) return -1;
+    if (bufTagliato.length < 32) return { frequenza: -1, rms: rms };
 
     const c = new Array(bufTagliato.length).fill(0);
     for (let i = 0; i < bufTagliato.length; i++) {
@@ -837,14 +861,14 @@ function rilevaFrequenza(buffer, sampleRate) {
     for (let i = d; i < bufTagliato.length; i++) {
         if (c[i] > maxval) { maxval = c[i]; maxpos = i; }
     }
-    if (maxpos <= 0) return -1;
+    if (maxpos <= 0) return { frequenza: -1, rms: rms };
 
     const periodoOttavaInferiore = maxpos * 2;
     if (periodoOttavaInferiore < c.length && c[periodoOttavaInferiore] > maxval * 0.72) {
         maxpos = periodoOttavaInferiore;
     }
 
-    return sampleRate / maxpos;
+    return { frequenza: sampleRate / maxpos, rms: rms };
 }
 
 // Avvio iniziale
